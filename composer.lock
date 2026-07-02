@@ -4,20 +4,20 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "33fdccc915fba77e1fa1b7d3542747cc",
+    "content-hash": "e61bee91dcd50e0151e69f30b5d24c7a",
     "packages": [
         {
             "name": "andydefer/algo-kit",
-            "version": "v0.5.0",
+            "version": "v0.6.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/andydefer/algo-kit.git",
-                "reference": "20277a6dd4d6c6f366e1009a44dc34d644fe49b1"
+                "reference": "949d12d3f5894a00b62c3266eeb653e4872904a2"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/andydefer/algo-kit/zipball/20277a6dd4d6c6f366e1009a44dc34d644fe49b1",
-                "reference": "20277a6dd4d6c6f366e1009a44dc34d644fe49b1",
+                "url": "https://api.github.com/repos/andydefer/algo-kit/zipball/949d12d3f5894a00b62c3266eeb653e4872904a2",
+                "reference": "949d12d3f5894a00b62c3266eeb653e4872904a2",
                 "shasum": ""
             },
             "require": {
@@ -49,9 +49,9 @@
             "description": "Algo KIT - Probabilistic data structures and algorithms for large-scale data processing in PHP",
             "support": {
                 "issues": "https://github.com/andydefer/algo-kit/issues",
-                "source": "https://github.com/andydefer/algo-kit/tree/v0.5.0"
+                "source": "https://github.com/andydefer/algo-kit/tree/v0.6.0"
             },
-            "time": "2026-07-02T08:01:19+00:00"
+            "time": "2026-07-02T16:10:58+00:00"
         },
         {
             "name": "andydefer/domain-structures",
