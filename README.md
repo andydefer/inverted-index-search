@@ -1,22 +1,20 @@
-# AlgoKIT - Documentation complète
+# InvertedIndexSearch - Documentation complète
 
 [![PHP Version](https://img.shields.io/badge/PHP-8.1%2B-blue.svg)](https://php.net)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Package](https://img.shields.io/badge/package-andydefer%2Finverted--index--search-blue)](https://packagist.org/packages/andydefer/inverted-index-search)
 
 ## 📖 Table des matières
 
 1. [Introduction](#introduction)
 2. [Installation](#installation)
 3. [Architecture](#architecture)
-4. [Les structures de données](#les-structures-de-données)
-   - [Trie - Autocomplétion](#trie---autocomplétion)
-   - [BKTree - Correction orthographique](#bktree---correction-orthographique)
-   - [BloomFilter - Test d'existence](#bloomfilter---test-dexistence)
-   - [CountMinSketch - Comptage de fréquence](#countminsketch---comptage-de-fréquence)
-   - [HyperLogLog - Comptage d'éléments uniques](#hyperloglog---comptage-déléments-uniques)
-   - [TopK - Éléments les plus fréquents](#topk---éléments-les-plus-fréquents)
-5. [Cas d'usage réels](#cas-dusage-réels)
-6. [Persistance](#persistance)
+4. [Composants principaux](#composants-principaux)
+   - [InvertedIndexSearchService](#invertedindexsearchservice)
+   - [InvertedIndexQueryBuilder](#invertedindexquerybuilder)
+   - [InvertedIndexExpressionEvaluator](#invertedindexexpressionevaluator)
+5. [Opérateurs booléens](#opérateurs-booléens)
+6. [Cas d'usage réels](#cas-dusage-réels)
 7. [Performance](#performance)
 8. [API Reference](#api-reference)
 
@@ -24,1244 +22,546 @@
 
 ## Introduction
 
-**AlgoKIT** est une bibliothèque PHP qui implémente des structures de données probabilistes et algorithmiques optimisées pour le traitement de données à grande échelle. Elle permet de résoudre des problèmes complexes (comptage de millions d'éléments, recherche en temps réel, analyse de flux) avec une consommation mémoire minimale.
+**InvertedIndexSearch** est une bibliothèque PHP qui étend les capacités de l'index inversé d'AlgoKIT en fournissant un moteur de recherche complet avec opérateurs booléens. Elle permet d'effectuer des recherches plein texte complexes avec une syntaxe intuitive et des performances optimales.
 
 ### Philosophie
 
-| Problème | Solution classique | Solution AlgoKIT |
-|----------|-------------------|------------------|
-| Compter 10M d'IP uniques | Array de 10M éléments (500MB) | HyperLogLog (64KB) |
-| Suggestions en temps réel | Scanner tous les mots (lent) | Trie (O(1) par caractère) |
-| Vérifier des URLs crawlées | Base de données (lente) | BloomFilter (O(k)) |
-| Top 10 des recherches | Tri de millions de logs (lourd) | TopK (mémoire constante) |
+| Problème | Solution classique | Solution InvertedIndexSearch |
+|----------|-------------------|------------------------------|
+| Recherche plein texte | Scanner tous les documents (lent) | Index inversé (O(1) par terme) |
+| Requêtes booléennes | Implémentation manuelle | Opérateurs AND, OR, NOT, XOR |
+| Requêtes complexes | Construction manuelle d'expressions | QueryBuilder fluent |
+| Expressions imbriquées | Parsing complexe | Évaluateur avec support des parenthèses |
 
-### Les 6 structures clés
+### Les 3 composants clés
 
-| Structure | Rôle | Complexité | Cas d'usage |
-|-----------|------|------------|-------------|
-| **Trie** | Autocomplétion | O(L) | Suggestions de recherche, dictionnaire |
-| **BKTree** | Correction orthographique | O(n × log n) | "Vous avez voulu dire..." |
-| **BloomFilter** | Test d'existence | O(k) | URLs crawlées, cache bloqué |
-| **CountMinSketch** | Comptage de fréquence | O(d) | Analyse de logs, trending |
-| **HyperLogLog** | Comptage d'éléments uniques | O(1) | Visiteurs uniques, distincts |
-| **TopK** | Éléments les plus fréquents | O(k) | Classements, tendances |
+| Composant | Rôle | Utilisation |
+|-----------|------|-------------|
+| **SearchService** | API principale de recherche | Méthodes pratiques (and, or, not, xor) |
+| **QueryBuilder** | Construction fluent de requêtes | Conditions et groupes imbriqués |
+| **ExpressionEvaluator** | Évaluation d'expressions | Parsing et évaluation booléenne |
 
 ---
 
 ## Installation
 
 ```bash
-composer require andydefer/algokit
+composer require andydefer/inverted-index-search
 ```
 
 ### Prérequis
 
 - PHP 8.1 ou supérieur
-- Extension `json` (optionnelle pour persistance)
-- Extension `mbstring` (recommandée)
+- `andydefer/algo-kit` ^0.4.0 (inclus automatiquement)
+- `andydefer/domain-structures` (inclus automatiquement)
 
 ---
 
 ## Architecture
 
-### StorageInterface
+### Dépendances
 
-Toutes les structures utilisent une interface de stockage commune pour la persistance découplée.
-
-```php
-interface StorageInterface
-{
-    public function get(string $key, mixed $default = null): mixed;
-    public function set(string $key, mixed $value): void;
-    public function delete(string $key): bool;
-    public function exists(string $key): bool;
-}
+```
+InvertedIndexSearch
+    ├── AlgoKIT (InvertedIndex)
+    ├── DomainStructures (StringTypedCollection)
+    └── StorageKit (StorageInterface)
 ```
 
-**Avantages :**
-- Changez de moteur de stockage sans modifier le code métier
-- Testez facilement avec un storage en mémoire
-- Partagez les données entre plusieurs instances
-- Persistez automatiquement les données
+### Structure des composants
 
-**Storages disponibles :**
-- `MemoryStorage` : Stockage en mémoire (tests, développement)
-- `CacheStorage` : Stockage avec cache (Redis, Memcached)
-- `JsonlStorage` : Stockage dans des fichiers JSONL
-
-### Le concept de contexte
-
-Toutes les structures supportent le **contexte** pour isoler les données par catégorie :
-
-```php
-// Sans contexte → données globales
-$trie->insert('laravel');
-
-// Avec contexte → données isolées
-$trie->insert('bonjour', 'french');
-$trie->insert('hello', 'english');
-
-// Recherche dans un contexte spécifique
-$frenchWords = $trie->search('bon', 'french');  // ['bonjour']
-$englishWords = $trie->search('hel', 'english'); // ['hello']
+```
+InvertedIndexSearchService (API principale)
+    ├── and() / or() / not() / xor()
+    ├── expression()
+    ├── andWithLimit() / orWithLimit()
+    └── query() → QueryBuilder
+         ↓
+InvertedIndexQueryBuilder (Fluent)
+    ├── where() / orWhere() / whereNot()
+    ├── whereGroup() / orWhereGroup()
+    ├── get() / reset() / toExpression()
+         ↓
+InvertedIndexExpressionEvaluator (Évaluateur)
+    ├── tokenize()
+    ├── shuntingYard() → RPN
+    └── evaluateRPN()
 ```
 
 ---
 
-## Les structures de données
+## Composants principaux
 
-### Trie - Autocomplétion
+### InvertedIndexSearchService
 
-**Description :** Structure arborescente où chaque nœud représente un caractère. Les mots partageant un préfixe commun partagent le même chemin, permettant des recherches de préfixes en temps O(L) où L est la longueur du préfixe.
+Service principal offrant une API intuitive pour les recherches booléennes.
 
-**Théorie :** Le Trie est idéal pour l'autocomplétion car il évite de scanner tous les mots à chaque recherche. La complexité ne dépend que de la longueur du préfixe, pas du nombre total de mots.
+**Méthodes principales :**
 
-**Utilisation typique :** Autocomplétion de recherche, suggestions en temps réel, dictionnaire.
+| Méthode | Description | Exemple |
+|---------|-------------|---------|
+| `and(array $tokens)` | Tous les tokens doivent être présents | `$search->and(['php', 'laravel'])` |
+| `or(array $tokens)` | Au moins un token doit être présent | `$search->or(['php', 'python'])` |
+| `not(string $include, string $exclude)` | Inclure un token, exclure un autre | `$search->not('php', 'python')` |
+| `xor(string $term1, string $term2)` | Exactement un des deux tokens | `$search->xor('php', 'python')` |
+| `expression(string $expr)` | Expression booléenne complexe | `$search->expression('(php OR python) AND laravel')` |
+| `andWithLimit(array $tokens, int $limit)` | AND avec limite | `$search->andWithLimit(['php'], 10)` |
+| `orWithLimit(array $tokens, int $limit)` | OR avec limite | `$search->orWithLimit(['php'], 10)` |
+| `query()` | Retourne le QueryBuilder | `$search->query()->where('php')->get()` |
 
-```php
-use AndyDefer\AlgoKIT\Algorithms\Trie;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
-
-$storage = new MemoryStorage();
-$trie = new Trie($storage, 'search_autocomplete');
-
-// Indexation du dictionnaire
-$words = ['laravel', 'laragon', 'large', 'laptop', 'php', 'python', 'pandas'];
-foreach ($words as $word) {
-    $trie->insert($word);
-}
-
-// Recherche en temps réel
-$query = 'la';
-$suggestions = $trie->search($query, null, 5);
-
-echo "Suggestions pour '$query' :\n";
-foreach ($suggestions as $result) {
-    echo "  • {$result->word}\n";
-}
-// Sortie :
-// Suggestions pour 'la' :
-//   • laravel
-//   • laragon
-//   • large
-//   • laptop
-
-// Avec contexte
-$trie->insert('bonjour', 'french');
-$trie->insert('bonsoir', 'french');
-$trie->insert('hello', 'english');
-
-$french = $trie->search('bon', 'french', 5);
-foreach ($french as $result) {
-    echo "🇫🇷 {$result->word}\n";
-}
-// Sortie :
-// 🇫🇷 bonjour
-// 🇫🇷 bonsoir
-```
-
-### BKTree - Correction orthographique
-
-**Description :** Arbre de Burkhard-Keller qui organise les mots par distance de Levenshtein. Permet de trouver les mots les plus proches d'une requête avec une tolérance configurable.
-
-**Théorie :** La distance de Levenshtein mesure le nombre minimal de caractères à insérer, supprimer ou remplacer pour transformer un mot en un autre. Le BKTree explore seulement les branches de l'arbre susceptibles de contenir des mots dans la tolérance donnée.
-
-**Utilisation typique :** Correction des fautes de frappe, suggestions "Vous avez voulu dire...".
+**Exemple d'utilisation :**
 
 ```php
-use AndyDefer\AlgoKIT\Algorithms\BKTree;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
+use AndyDefer\AlgoKIT\Algorithms\InvertedIndex;
+use AndyDefer\InvertedIndexSearch\Services\InvertedIndexSearchService;
+use AndyDefer\InvertedIndexSearch\Services\InvertedIndexExpressionEvaluator;
+use AndyDefer\StorageKit\Storage\MemoryStorage;
 
 $storage = new MemoryStorage();
-$bkTree = new BKTree($storage, 'dictionary');
+$index = new InvertedIndex($storage, 'documents');
+$evaluator = new InvertedIndexExpressionEvaluator($index);
+$search = new InvertedIndexSearchService($index, $evaluator);
 
-// Indexation du dictionnaire
-$words = ['php', 'python', 'laravel', 'javascript', 'symfony', 'golang'];
-foreach ($words as $word) {
-    $bkTree->insert($word);
-}
-
-// Correction d'une faute de frappe
-$typo = 'larvel';
-$suggestions = $bkTree->search($typo, 2, 3);
-
-echo "Suggestions pour '$typo' :\n";
-foreach ($suggestions as $result) {
-    echo "  • {$result->word} (distance: {$result->distance})\n";
-}
-// Sortie :
-// Suggestions pour 'larvel' :
-//   • laravel (distance: 1)
-//   • javascript (distance: 6)
-//   • symfony (distance: 6)
-
-// Tolérance plus élevée
-$typo = 'javscrit';
-$suggestions = $bkTree->search($typo, 3, 2);
-foreach ($suggestions as $result) {
-    echo "  • {$result->word} (distance: {$result->distance})\n";
-}
-// Sortie :
-//   • javascript (distance: 2)
-//   • php (distance: 7)
-```
-
-### BloomFilter - Test d'existence
-
-**Description :** Filtre probabiliste qui utilise un tableau de bits et plusieurs fonctions de hachage. L'insertion définit plusieurs bits à 1. Le test vérifie si tous les bits correspondants sont à 1.
-
-**Théorie :** 
-- ✅ **Pas de faux négatifs** : Si le test retourne `false`, l'élément n'est **certainement pas** dans l'ensemble
-- ⚠️ **Faux positifs possibles** : Si le test retourne `true`, l'élément **probablement** dans l'ensemble
-- La probabilité de faux positifs est contrôlée par la taille du filtre et le nombre de fonctions de hachage
-
-**Utilisation typique :** Vérification d'URLs déjà crawlées, filtrage de spam, cache bloqué.
-
-```php
-use AndyDefer\AlgoKIT\Algorithms\BloomFilter;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
-
-$storage = new MemoryStorage();
-$bloom = new BloomFilter($storage, 100000, 3, 'url_index');
-
-// Indexation des URLs déjà crawlées
-$urls = [
-    'https://example.com/page1',
-    'https://example.com/page2',
-    'https://example.com/page3'
+// Indexation des documents
+$documents = [
+    ['id' => 'doc1', 'tokens' => ['php', 'laravel', 'web']],
+    ['id' => 'doc2', 'tokens' => ['php', 'python', 'data']],
+    ['id' => 'doc3', 'tokens' => ['php', 'laravel', 'vuejs']],
+    ['id' => 'doc4', 'tokens' => ['python', 'django', 'web']],
 ];
 
-foreach ($urls as $url) {
-    $bloom->insert($url);
+foreach ($documents as $doc) {
+    $index->add(InvertedIndexRecord::from([
+        'document_id' => $doc['id'],
+        'tokens' => $doc['tokens'],
+    ]));
 }
 
-// Web crawler - éviter de recrawler
-function shouldCrawl(BloomFilter $bloom, string $url): bool {
-    if ($bloom->exists($url)) {
-        echo "⏭️  $url déjà crawlée\n";
-        return false;
+// Recherches
+$results1 = $search->and(['php', 'laravel']);
+// → doc1, doc3
+
+$results2 = $search->or(['php', 'python']);
+// → doc1, doc2, doc3, doc4
+
+$results3 = $search->not('php', 'python');
+// → doc1, doc3
+
+$results4 = $search->expression('(php AND laravel) OR (python AND django)');
+// → doc1, doc3, doc4
+```
+
+### InvertedIndexQueryBuilder
+
+Constructeur fluent pour des requêtes complexes.
+
+**Méthodes :**
+
+| Méthode | Description | Exemple |
+|---------|-------------|---------|
+| `where(string $token)` | Condition AND | `->where('php')` |
+| `orWhere(string $token)` | Condition OR | `->orWhere('python')` |
+| `whereNot(string $token)` | Exclusion | `->whereNot('java')` |
+| `whereGroup(callable $callback)` | Groupe AND | `->whereGroup(fn($q) => $q->where('laravel')->orWhere('vuejs'))` |
+| `orWhereGroup(callable $callback)` | Groupe OR | `->orWhereGroup(fn($q) => $q->where('php')->where('laravel'))` |
+| `get()` | Exécute la requête | `->get()` |
+| `reset()` | Réinitialise le builder | `->reset()` |
+| `toExpression()` | Génère l'expression | `->toExpression()` |
+
+**Exemple d'utilisation :**
+
+```php
+// Requête : php AND (laravel OR vuejs) AND NOT python
+$results = $search->query()
+    ->where('php')
+    ->whereGroup(function($q) {
+        $q->where('laravel')
+          ->orWhere('vuejs');
+    })
+    ->whereNot('python')
+    ->get();
+
+// Construction dynamique
+$builder = $search->query();
+
+if ($mustHave) {
+    foreach ($mustHave as $token) {
+        $builder->where($token);
     }
-    echo "🕷️  Crawl de $url\n";
-    $bloom->insert($url);
-    return true;
 }
 
-shouldCrawl($bloom, 'https://example.com/page1'); // ⏭️  déjà crawlée
-shouldCrawl($bloom, 'https://example.com/page4'); // 🕷️  Crawl
-shouldCrawl($bloom, 'https://example.com/page2'); // ⏭️  déjà crawlée
-
-// Vérification par lot
-use AndyDefer\AlgoKIT\Collections\BloomFilterCollection;
-use AndyDefer\AlgoKIT\Records\BloomFilterRecord;
-
-$collection = new BloomFilterCollection();
-$collection->add(new BloomFilterRecord('https://example.com/page1'));
-$collection->add(new BloomFilterRecord('https://example.com/page5'));
-
-$results = $bloom->existsBatch($collection);
-foreach ($results as $result) {
-    echo $result->value . " : " . ($result->exists ? '✅ existe' : '❌ inexistant') . "\n";
+if ($shouldHave) {
+    $builder->whereGroup(function($q) use ($shouldHave) {
+        foreach ($shouldHave as $token) {
+            $q->orWhere($token);
+        }
+    });
 }
+
+$results = $builder->get();
 ```
 
-### CountMinSketch - Comptage de fréquence
+### InvertedIndexExpressionEvaluator
 
-**Description :** Structure probabiliste utilisant une matrice de compteurs et plusieurs fonctions de hachage. Chaque insertion incrémente plusieurs compteurs. La fréquence estimée est le minimum des compteurs correspondants.
+Évaluateur d'expressions booléennes avec support des parenthèses.
 
-**Théorie :**
-- ✅ **Jamais de sous-estimation** : La valeur estimée est toujours ≥ à la valeur réelle
-- ⚠️ **Surestimation possible** : Les collisions de hachage peuvent gonfler les compteurs
-- L'erreur est bornée par `(width / 2) × depth` avec une probabilité de `1 - e^(-depth)`
+**Syntaxe supportée :**
 
-**Utilisation typique :** Analyse de logs, top des recherches, trending topics.
+| Opérateur | Description | Priorité | Exemple |
+|-----------|-------------|----------|---------|
+| `NOT` | Négation (unaire) | 4 | `NOT python` |
+| `XOR` | Ou exclusif | 3 | `php XOR python` |
+| `AND` | Et logique | 2 | `php AND laravel` |
+| `OR` | Ou logique | 1 | `php OR python` |
+| `()` | Regroupement | - | `(php OR python) AND laravel` |
+
+**Exemple d'utilisation :**
 
 ```php
-use AndyDefer\AlgoKIT\Algorithms\CountMinSketch;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
+// Expression simple
+$results = $evaluator->evaluate('php AND laravel');
 
-$storage = new MemoryStorage();
-$cms = new CountMinSketch($storage, 10000, 5, 'search_frequencies');
+// Expression avec NOT
+$results = $evaluator->evaluate('php AND (NOT python)');
 
-// Tracker les recherches utilisateurs
-$searches = [
-    'php', 'laravel', 'php', 'python', 'php', 
-    'laravel', 'php', 'javascript', 'php', 'golang'
-];
+// Expression complexe imbriquée
+$results = $evaluator->evaluate('(php AND laravel) OR (python AND django)');
 
-foreach ($searches as $term) {
-    $cms->add($term);
-}
-
-// Fréquences approximatives
-echo "Fréquences approximatives :\n";
-echo "  php: " . $cms->count('php') . "\n";          // ~5
-echo "  laravel: " . $cms->count('laravel') . "\n";  // ~2
-echo "  python: " . $cms->count('python') . "\n";    // ~1
-echo "  ruby: " . $cms->count('ruby') . "\n";        // ~0
-
-// Avec contexte (par site)
-$cms->add('php', 'site_a');
-$cms->add('php', 'site_a');
-$cms->add('php', 'site_b');
-
-echo "php sur site_a: " . $cms->count('php', 'site_a') . "\n"; // ~2
-echo "php sur site_b: " . $cms->count('php', 'site_b') . "\n"; // ~1
-
-// Opérations batch
-use AndyDefer\AlgoKIT\Collections\CountMinSketchCollection;
-use AndyDefer\AlgoKIT\Records\CountMinSketchRecord;
-
-$batch = new CountMinSketchCollection();
-$batch->add(new CountMinSketchRecord('php'));
-$batch->add(new CountMinSketchRecord('php'));
-$batch->add(new CountMinSketchRecord('laravel'));
-
-$cms->addBatch($batch);
-echo "php après batch: " . $cms->count('php') . "\n"; // ~7
+// Expression avec plusieurs niveaux
+$results = $evaluator->evaluate('php AND (laravel OR vuejs) AND (NOT python)');
 ```
 
-### HyperLogLog - Comptage d'éléments uniques
+---
 
-**Description :** Algorithme qui estime le nombre d'éléments distincts en utilisant un tableau de registres. Chaque valeur est hachée, et le registre correspondant est mis à jour avec le nombre de zéros initiaux du hash.
+## Opérateurs booléens
 
-**Théorie :** 
-- L'algorithme observe la distribution des bits dans les hashs
-- Plus il y a d'éléments uniques, plus il est probable d'observer des hashs avec de nombreux zéros initiaux
-- La précision est contrôlée par le nombre de registres (2^precision)
+### AND (Et logique)
 
-**Erreur standard :** `1.04 / sqrt(2^precision)`
-- `precision = 10` (1024 registres) → erreur ~3.2%
-- `precision = 14` (16384 registres) → erreur ~0.8%
-- `precision = 16` (65536 registres) → erreur ~0.4%
-
-**Utilisation typique :** Visiteurs uniques, événements distincts, analyse de données massives.
+Documents contenant tous les tokens.
 
 ```php
-use AndyDefer\AlgoKIT\Algorithms\HyperLogLog;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
+// Syntaxe directe
+$results = $search->and(['php', 'laravel']);
 
-$storage = new MemoryStorage();
-$hll = new HyperLogLog($storage, 14, 'unique_visitors');
+// Via expression
+$results = $search->expression('php AND laravel');
 
-// Simuler un flux de visiteurs
-$visitors = [
-    'user_123', 'user_456', 'user_123', 'user_789', 
-    'user_456', 'user_321', 'user_123', 'user_654'
-];
-
-foreach ($visitors as $userId) {
-    $hll->add($userId);
-}
-
-$unique = $hll->count();
-echo "Visiteurs uniques: $unique\n"; // ~5
-
-// Par date (contexte)
-$dates = ['2024-01-01', '2024-01-02'];
-
-foreach ($visitors as $index => $userId) {
-    $date = $dates[$index % 2];
-    $hll->add($userId, $date);
-}
-
-echo "2024-01-01: " . $hll->count('2024-01-01') . " utilisateurs\n";
-echo "2024-01-02: " . $hll->count('2024-01-02') . " utilisateurs\n";
-echo "Total: " . $hll->count() . " utilisateurs\n";
-
-// Opérations batch
-use AndyDefer\AlgoKIT\Collections\HyperLogLogCollection;
-use AndyDefer\AlgoKIT\Records\HyperLogLogRecord;
-
-$batch = new HyperLogLogCollection();
-$batch->add(new HyperLogLogRecord('user_999'));
-$batch->add(new HyperLogLogRecord('user_888', '2024-01-03'));
-
-$hll->addBatch($batch);
-
-echo "Nouveau total: " . $hll->count() . "\n"; // ~6
+// Via QueryBuilder
+$results = $search->query()->where('php')->where('laravel')->get();
 ```
 
-### TopK - Éléments les plus fréquents
+### OR (Ou logique)
 
-**Description :** Structure qui maintient les K éléments les plus fréquents dans un flux. Utilise un espace constant et un algorithme de remplacement du moins fréquent.
-
-**Théorie :** 
-- La structure conserve exactement K éléments
-- À chaque nouvel élément, si la liste est pleine, l'élément le moins fréquent est remplacé si le nouvel élément est plus fréquent
-- Idéal pour les flux où on ne peut pas stocker tous les éléments
-
-**Utilisation typique :** Tendances, produits populaires, top des recherches.
+Documents contenant au moins un token.
 
 ```php
-use AndyDefer\AlgoKIT\Algorithms\TopK;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
+// Syntaxe directe
+$results = $search->or(['php', 'python']);
 
-$storage = new MemoryStorage();
-$topK = new TopK($storage, 3, 'top_searches');
+// Via expression
+$results = $search->expression('php OR python');
 
-// Flux de recherches en temps réel
-$searches = ['php', 'laravel', 'php', 'python', 'php', 'laravel', 'php', 'golang'];
+// Via QueryBuilder
+$results = $search->query()->where('php')->orWhere('python')->get();
+```
 
-foreach ($searches as $term) {
-    $topK->add($term);
-}
+### NOT (Négation)
 
-// Top 3 des recherches
-echo "Top recherches :\n";
-foreach ($topK->getTop() as $rank => $item) {
-    echo "  #" . ($rank + 1) . " {$item->value}: {$item->count}\n";
-}
-// Sortie :
-// Top recherches :
-//   #1 php: 4
-//   #2 laravel: 2
-//   #3 python: 1
+Documents contenant le premier token mais pas le second.
 
-// Avec incréments plus importants
-$topK->add('laravel', 5);
-$topK->add('golang', 3);
+```php
+// Syntaxe directe
+$results = $search->not('php', 'python');
 
-echo "Après incréments :\n";
-foreach ($topK->getTop() as $rank => $item) {
-    echo "  #" . ($rank + 1) . " {$item->value}: {$item->count}\n";
-}
-// Sortie :
-// Après incréments :
-//   #1 laravel: 7
-//   #2 php: 4
-//   #3 golang: 3
+// Via expression
+$results = $search->expression('php AND (NOT python)');
 
-// Opérations batch
-use AndyDefer\AlgoKIT\Collections\TopKCollection;
-use AndyDefer\AlgoKIT\Records\TopKRecord;
+// Via QueryBuilder
+$results = $search->query()->where('php')->whereNot('python')->get();
+```
 
-$batch = new TopKCollection();
-$batch->add(new TopKRecord('php', 10));
-$batch->add(new TopKRecord('javascript', 2));
+### XOR (Ou exclusif)
 
-$topK->addBatch($batch);
+Documents contenant exactement un des deux tokens.
 
-echo "Final :\n";
-foreach ($topK->getTop() as $rank => $item) {
-    echo "  #" . ($rank + 1) . " {$item->value}: {$item->count}\n";
-}
-// Sortie :
-// Final :
-//   #1 php: 14
-//   #2 laravel: 7
-//   #3 golang: 3
+```php
+// Syntaxe directe
+$results = $search->xor('php', 'python');
+
+// Via expression
+$results = $search->expression('php XOR python');
+
+// Via QueryBuilder (via expression)
+$results = $search->query()->expression('php XOR python')->get();
 ```
 
 ---
 
 ## Cas d'usage réels
 
-### 1. Compteur d'IP uniques par jour
+### 1. Moteur de recherche de blog
 
-**Problème :** Compter le nombre d'IP uniques qui visitent un site web chaque jour, avec des millions de requêtes.
-
-**Solution :** HyperLogLog avec contexte temporel. 64KB de mémoire suffisent pour compter des milliards d'IP uniques.
+**Problème :** Implémenter un moteur de recherche d'articles avec filtres par tags, catégories et exclusions.
 
 ```php
-use AndyDefer\AlgoKIT\Algorithms\HyperLogLog;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
-use AndyDefer\AlgoKIT\Collections\HyperLogLogCollection;
-use AndyDefer\AlgoKIT\Records\HyperLogLogRecord;
-
-class UniqueIPCounter
+class BlogSearch
 {
-    private HyperLogLog $hll;
+    private InvertedIndexSearchService $search;
     
-    public function __construct(HyperLogLog $hll)
+    public function searchArticles(array $criteria): array
     {
-        $this->hll = $hll;
-    }
-    
-    public function trackVisit(string $ip): void
-    {
-        $date = date('Y-m-d');
-        $this->hll->add($ip, $date);
-        $this->hll->add($ip); // Global
-    }
-    
-    public function getUniqueIPs(string $date): int
-    {
-        return $this->hll->count($date);
-    }
-    
-    public function getTotalUniqueIPs(): int
-    {
-        return $this->hll->count();
-    }
-    
-    public function getDailyStats(array $dates): array
-    {
-        $collection = new HyperLogLogCollection();
-        foreach ($dates as $date) {
-            $collection->add(new HyperLogLogRecord('dummy', $date));
-        }
+        $builder = $this->search->query();
         
-        $results = $this->hll->countBatch($collection);
-        $stats = [];
-        foreach ($results as $result) {
-            $stats[$result->context] = $result->count;
-        }
-        return $stats;
-    }
-}
-
-// ============================================
-// UTILISATION
-// ============================================
-
-$storage = new MemoryStorage();
-$hll = new HyperLogLog($storage, 14, 'ip_counter');
-$counter = new UniqueIPCounter($hll);
-
-// Simuler des visites sur 3 jours
-$visits = [
-    '2024-01-01' => ['192.168.1.1', '192.168.1.2', '192.168.1.1', '192.168.1.3'],
-    '2024-01-02' => ['192.168.1.1', '192.168.1.4', '192.168.1.5', '192.168.1.1'],
-    '2024-01-03' => ['192.168.1.2', '192.168.1.3', '192.168.1.6']
-];
-
-foreach ($visits as $date => $ips) {
-    foreach ($ips as $ip) {
-        $counter->trackVisit($ip);
-    }
-}
-
-echo "=== Statistiques IP uniques ===\n";
-echo "2024-01-01: " . $counter->getUniqueIPs('2024-01-01') . " IP uniques\n";
-echo "2024-01-02: " . $counter->getUniqueIPs('2024-01-02') . " IP uniques\n";
-echo "2024-01-03: " . $counter->getUniqueIPs('2024-01-03') . " IP uniques\n";
-echo "Total: " . $counter->getTotalUniqueIPs() . " IP uniques\n";
-
-$stats = $counter->getDailyStats(['2024-01-01', '2024-01-02']);
-echo "Batch: " . print_r($stats, true);
-```
-
-### 2. Système de recherche avec autocomplétion
-
-**Problème :** Implémenter un système de recherche avec suggestions en temps réel et correction des fautes.
-
-**Solution :** Combinaison de Trie (autocomplétion), BKTree (correction) et CountMinSketch (suivi des tendances).
-
-```php
-use AndyDefer\AlgoKIT\Algorithms\Trie;
-use AndyDefer\AlgoKIT\Algorithms\BKTree;
-use AndyDefer\AlgoKIT\Algorithms\CountMinSketch;
-use AndyDefer\AlgoKIT\Algorithms\TopK;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
-
-class SearchEngine
-{
-    private Trie $trie;
-    private BKTree $bkTree;
-    private CountMinSketch $cms;
-    private TopK $topK;
-    
-    public function __construct(
-        Trie $trie,
-        BKTree $bkTree,
-        CountMinSketch $cms,
-        TopK $topK
-    ) {
-        $this->trie = $trie;
-        $this->bkTree = $bkTree;
-        $this->cms = $cms;
-        $this->topK = $topK;
-    }
-    
-    public function indexTerm(string $term): void
-    {
-        $this->trie->insert(strtolower($term));
-        $this->bkTree->insert(strtolower($term));
-    }
-    
-    public function search(string $query, int $limit = 10): array
-    {
-        $query = strtolower(trim($query));
-        $results = [];
-        
-        // 1. Autocomplétion (Trie)
-        if (strlen($query) > 0) {
-            $suggestions = $this->trie->search($query, null, $limit);
-            foreach ($suggestions as $suggestion) {
-                $results[] = [
-                    'term' => $suggestion->word,
-                    'type' => 'autocomplete',
-                    'score' => $this->cms->count($suggestion->word) + 1
-                ];
+        // Tags obligatoires
+        if (!empty($criteria['tags'])) {
+            foreach ($criteria['tags'] as $tag) {
+                $builder->where($tag);
             }
-            
-            // 2. Correction orthographique (BKTree)
-            if (count($results) < $limit) {
-                $corrections = $this->bkTree->search($query, 2, $limit - count($results));
-                foreach ($corrections as $correction) {
-                    $results[] = [
-                        'term' => $correction->word,
-                        'type' => 'correction',
-                        'distance' => $correction->distance,
-                        'score' => $this->cms->count($correction->word) + 1
-                    ];
+        }
+        
+        // Catégories (au moins une)
+        if (!empty($criteria['categories'])) {
+            $builder->whereGroup(function($q) use ($criteria) {
+                foreach ($criteria['categories'] as $category) {
+                    $q->orWhere($category);
                 }
+            });
+        }
+        
+        // Exclusions
+        if (!empty($criteria['exclude'])) {
+            foreach ($criteria['exclude'] as $exclude) {
+                $builder->whereNot($exclude);
             }
         }
         
-        // Tri par score décroissant
-        usort($results, fn($a, $b) => $b['score'] <=> $a['score']);
-        return array_slice($results, 0, $limit);
-    }
-    
-    public function trackSearch(string $term): void
-    {
-        $term = strtolower(trim($term));
-        $this->cms->add($term);
-        $this->topK->add($term);
-    }
-    
-    public function getPopularTerms(int $limit = 10): array
-    {
-        $top = $this->topK->getTop();
-        $result = [];
-        foreach ($top as $item) {
-            $result[] = [
-                'term' => $item->value,
-                'count' => $item->count
-            ];
-        }
-        return array_slice($result, 0, $limit);
-    }
-}
-
-// ============================================
-// UTILISATION
-// ============================================
-
-$storage = new MemoryStorage();
-
-$searchEngine = new SearchEngine(
-    new Trie($storage, 'search_trie'),
-    new BKTree($storage, 'search_bktree'),
-    new CountMinSketch($storage, 10000, 5, 'search_cms'),
-    new TopK($storage, 10, 'search_topk')
-);
-
-// Indexation du dictionnaire
-$terms = ['laravel', 'php', 'python', 'javascript', 'laragon', 'large', 'laptop'];
-foreach ($terms as $term) {
-    $searchEngine->indexTerm($term);
-}
-
-// Simuler des recherches
-$searches = ['php', 'laravel', 'php', 'python', 'php', 'laravel', 'php', 'laptop'];
-foreach ($searches as $search) {
-    $searchEngine->trackSearch($search);
-}
-
-// Recherche avec autocomplétion
-$query = 'la';
-$results = $searchEngine->search($query, 5);
-echo "Résultats pour '$query':\n";
-foreach ($results as $result) {
-    echo "- {$result['term']} (type: {$result['type']}, score: {$result['score']})\n";
-}
-
-// Recherche avec correction
-$typo = 'larvel';
-$results = $searchEngine->search($typo, 5);
-echo "\nRésultats pour '$typo':\n";
-foreach ($results as $result) {
-    echo "- {$result['term']} (type: {$result['type']}, distance: " . ($result['distance'] ?? 'N/A') . ")\n";
-}
-
-// Top des recherches
-$popular = $searchEngine->getPopularTerms(5);
-echo "\nTop des recherches:\n";
-foreach ($popular as $item) {
-    echo "- {$item['term']}: {$item['count']}\n";
-}
-```
-
-### 3. Analyse de logs en temps réel
-
-**Problème :** Analyser les logs d'accès pour identifier les IPs les plus actives, les endpoints les plus sollicités, et les erreurs fréquentes.
-
-**Solution :** Combinaison de CountMinSketch (fréquences), TopK (leaders) et HyperLogLog (IP uniques).
-
-```php
-use AndyDefer\AlgoKIT\Algorithms\CountMinSketch;
-use AndyDefer\AlgoKIT\Algorithms\TopK;
-use AndyDefer\AlgoKIT\Algorithms\HyperLogLog;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
-
-class LogAnalyzer
-{
-    private CountMinSketch $cms;
-    private TopK $topK;
-    private HyperLogLog $hll;
-    
-    public function __construct(
-        CountMinSketch $cms,
-        TopK $topK,
-        HyperLogLog $hll
-    ) {
-        $this->cms = $cms;
-        $this->topK = $topK;
-        $this->hll = $hll;
-    }
-    
-    public function processLog(array $log): void
-    {
-        $ip = $log['ip'] ?? 'unknown';
-        $endpoint = $log['endpoint'] ?? '/';
-        $status = $log['status'] ?? 200;
-        $date = date('Y-m-d');
-        
-        // Fréquences
-        $this->cms->add("ip:{$ip}");
-        $this->cms->add("endpoint:{$endpoint}");
-        $this->cms->add("status:{$status}");
-        
-        // Top K
-        $this->topK->add("ip:{$ip}");
-        $this->topK->add("endpoint:{$endpoint}");
-        $this->topK->add("status:{$status}");
-        
-        // IP uniques par jour
-        $this->hll->add($ip, "daily_{$date}");
-        $this->hll->add($ip);
-    }
-    
-    public function getTopIPs(int $limit = 10): array
-    {
-        $top = $this->topK->getTop();
-        $ips = [];
-        foreach ($top as $item) {
-            if (str_starts_with($item->value, 'ip:')) {
-                $ip = substr($item->value, 3);
-                $ips[] = [
-                    'ip' => $ip,
-                    'requests' => $item->count,
-                    'estimated' => $this->cms->count("ip:{$ip}")
-                ];
-            }
-        }
-        return array_slice($ips, 0, $limit);
-    }
-    
-    public function getTopEndpoints(int $limit = 10): array
-    {
-        $top = $this->topK->getTop();
-        $endpoints = [];
-        foreach ($top as $item) {
-            if (str_starts_with($item->value, 'endpoint:')) {
-                $endpoint = substr($item->value, 9);
-                $endpoints[] = [
-                    'endpoint' => $endpoint,
-                    'requests' => $item->count,
-                    'estimated' => $this->cms->count("endpoint:{$endpoint}")
-                ];
-            }
-        }
-        return array_slice($endpoints, 0, $limit);
-    }
-    
-    public function getTopStatuses(int $limit = 5): array
-    {
-        $top = $this->topK->getTop();
-        $statuses = [];
-        foreach ($top as $item) {
-            if (str_starts_with($item->value, 'status:')) {
-                $status = (int) substr($item->value, 7);
-                $statuses[] = [
-                    'status' => $status,
-                    'count' => $item->count
-                ];
-            }
-        }
-        return array_slice($statuses, 0, $limit);
-    }
-    
-    public function getUniqueIPsForDate(string $date): int
-    {
-        return $this->hll->count("daily_{$date}");
-    }
-    
-    public function getTotalUniqueIPs(): int
-    {
-        return $this->hll->count();
-    }
-}
-
-// ============================================
-// UTILISATION
-// ============================================
-
-$storage = new MemoryStorage();
-
-$analyzer = new LogAnalyzer(
-    new CountMinSketch($storage, 50000, 5, 'log_cms'),
-    new TopK($storage, 20, 'log_topk'),
-    new HyperLogLog($storage, 14, 'log_hll')
-);
-
-// Simuler un flux de logs
-$logs = [
-    ['ip' => '192.168.1.1', 'endpoint' => '/api/users', 'status' => 200],
-    ['ip' => '192.168.1.2', 'endpoint' => '/api/products', 'status' => 200],
-    ['ip' => '192.168.1.1', 'endpoint' => '/api/users', 'status' => 200],
-    ['ip' => '192.168.1.3', 'endpoint' => '/api/orders', 'status' => 404],
-    ['ip' => '192.168.1.1', 'endpoint' => '/api/users', 'status' => 200],
-    ['ip' => '192.168.1.2', 'endpoint' => '/api/products', 'status' => 200],
-    ['ip' => '192.168.1.4', 'endpoint' => '/api/users', 'status' => 500],
-    ['ip' => '192.168.1.1', 'endpoint' => '/api/orders', 'status' => 200],
-];
-
-foreach ($logs as $log) {
-    $analyzer->processLog($log);
-}
-
-echo "=== TOP IPS ===\n";
-foreach ($analyzer->getTopIPs(5) as $ip) {
-    echo "- {$ip['ip']}: {$ip['requests']} requêtes\n";
-}
-
-echo "\n=== TOP ENDPOINTS ===\n";
-foreach ($analyzer->getTopEndpoints(5) as $endpoint) {
-    echo "- {$endpoint['endpoint']}: {$endpoint['requests']} requêtes\n";
-}
-
-echo "\n=== TOP STATUS ===\n";
-foreach ($analyzer->getTopStatuses() as $status) {
-    echo "- HTTP {$status['status']}: {$status['count']} occurrences\n";
-}
-
-echo "\n=== IP UNIQUES ===\n";
-echo "Total: " . $analyzer->getTotalUniqueIPs() . " IP uniques\n";
-echo "Aujourd'hui: " . $analyzer->getUniqueIPsForDate(date('Y-m-d')) . " IP uniques\n";
-```
-
-### 4. Détection de spam
-
-**Problème :** Détecter les messages de spam en vérifiant si le contenu a déjà été vu ou contient des mots-clés suspects.
-
-**Solution :** BloomFilter pour la détection rapide avec contrôle des faux positifs.
-
-```php
-use AndyDefer\AlgoKIT\Algorithms\BloomFilter;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
-use AndyDefer\AlgoKIT\Collections\BloomFilterCollection;
-use AndyDefer\AlgoKIT\Records\BloomFilterRecord;
-
-class SpamDetector
-{
-    private BloomFilter $bloom;
-    
-    public function __construct(BloomFilter $bloom)
-    {
-        $this->bloom = $bloom;
-    }
-    
-    public function markAsSpam(string $content): void
-    {
-        $hash = md5($content);
-        $this->bloom->insert($hash, 'spam');
-        
-        $words = explode(' ', strtolower($content));
-        foreach ($words as $word) {
-            if (strlen($word) > 3) {
-                $this->bloom->insert($word, 'spam_keywords');
-            }
-        }
-    }
-    
-    public function isSpam(string $content): bool
-    {
-        $hash = md5($content);
-        
-        if ($this->bloom->exists($hash, 'spam')) {
-            return true;
-        }
-        
-        $words = explode(' ', strtolower($content));
-        $spamScore = 0;
-        $totalWords = 0;
-        
-        foreach ($words as $word) {
-            if (strlen($word) > 3) {
-                $totalWords++;
-                if ($this->bloom->exists($word, 'spam_keywords')) {
-                    $spamScore++;
-                }
-            }
-        }
-        
-        return $totalWords > 0 && ($spamScore / $totalWords) > 0.3;
-    }
-    
-    public function isSpamBatch(array $messages): array
-    {
-        $collection = new BloomFilterCollection();
-        foreach ($messages as $id => $content) {
-            $hash = md5($content);
-            $collection->add(new BloomFilterRecord($hash, 'spam'));
-        }
-        
-        $results = $this->bloom->existsBatch($collection);
-        $spam = [];
-        foreach ($results as $result) {
-            $spam[$result->value] = $result->exists;
-        }
-        return $spam;
-    }
-}
-
-// ============================================
-// UTILISATION
-// ============================================
-
-$storage = new MemoryStorage();
-$bloom = new BloomFilter($storage, 100000, 3, 'spam_filter');
-$detector = new SpamDetector($bloom);
-
-// Entraînement avec des spams connus
-$spams = [
-    'Buy cheap viagra now!',
-    'Get rich quick!!!',
-    'FREE money making opportunity!',
-    'Click here for guaranteed results'
-];
-
-foreach ($spams as $spam) {
-    $detector->markAsSpam($spam);
-}
-
-// Tester des messages
-$messages = [
-    'Buy cheap viagra now!',
-    'Hello, how are you today?',
-    'Get rich quick!!!',
-    'Meeting at 3pm tomorrow',
-    'FREE money making opportunity! Click here'
-];
-
-echo "=== DÉTECTION DE SPAM ===\n";
-foreach ($messages as $message) {
-    $isSpam = $detector->isSpam($message);
-    echo ($isSpam ? "[SPAM] " : "[HAM]  ") . $message . "\n";
-}
-```
-
-### 5. Système de recommandation
-
-**Problème :** Recommander des produits à un utilisateur en fonction de ses vues antérieures et de la popularité globale.
-
-**Solution :** CountMinSketch (suivi des vues) + TopK (produits populaires) + filtrage par tags.
-
-```php
-use AndyDefer\AlgoKIT\Algorithms\CountMinSketch;
-use AndyDefer\AlgoKIT\Algorithms\TopK;
-use AndyDefer\AlgoKIT\Storage\MemoryStorage;
-use AndyDefer\AlgoKIT\Collections\CountMinSketchCollection;
-use AndyDefer\AlgoKIT\Records\CountMinSketchRecord;
-
-class RecommendationEngine
-{
-    private CountMinSketch $cms;
-    private TopK $topK;
-    private array $productCatalog = [];
-    
-    public function __construct(CountMinSketch $cms, TopK $topK)
-    {
-        $this->cms = $cms;
-        $this->topK = $topK;
-    }
-    
-    public function addProduct(string $id, string $name, array $tags): void
-    {
-        $this->productCatalog[$id] = [
-            'name' => $name,
-            'tags' => $tags
-        ];
-    }
-    
-    public function trackView(string $userId, string $productId): void
-    {
-        $key = "{$userId}:{$productId}";
-        $this->cms->add($key);
-        $this->topK->add($key);
-    }
-    
-    public function trackViewBatch(array $views): void
-    {
-        $collection = new CountMinSketchCollection();
-        foreach ($views as $view) {
-            $key = "{$view['user_id']}:{$view['product_id']}";
-            $collection->add(new CountMinSketchRecord($key));
-        }
-        $this->cms->addBatch($collection);
-    }
-    
-    public function getUserPreferences(string $userId, int $limit = 5): array
-    {
-        $top = $this->topK->getTop();
-        $preferences = [];
-        
-        foreach ($top as $item) {
-            if (str_starts_with($item->value, $userId . ':')) {
-                $productId = explode(':', $item->value)[1];
-                if (isset($this->productCatalog[$productId])) {
-                    $preferences[] = [
-                        'product_id' => $productId,
-                        'product_name' => $this->productCatalog[$productId]['name'],
-                        'views' => $item->count
-                    ];
-                }
-                if (count($preferences) >= $limit) {
-                    break;
-                }
-            }
-        }
-        return $preferences;
-    }
-    
-    public function getRecommendations(string $userId, int $limit = 5): array
-    {
-        $preferences = $this->getUserPreferences($userId, 3);
-        $tags = [];
-        
-        foreach ($preferences as $pref) {
-            $tags = array_merge($tags, $this->productCatalog[$pref['product_id']]['tags']);
-        }
-        
-        $tagCounts = array_count_values($tags);
-        arsort($tagCounts);
-        $topTags = array_slice(array_keys($tagCounts), 0, 3);
-        
-        $recommendations = [];
-        foreach ($this->productCatalog as $id => $product) {
-            if (array_intersect($product['tags'], $topTags)) {
-                $recommendations[] = [
-                    'product_id' => $id,
-                    'product_name' => $product['name'],
-                    'matching_tags' => array_intersect($product['tags'], $topTags)
-                ];
-            }
-            if (count($recommendations) >= $limit) {
-                break;
-            }
-        }
-        return $recommendations;
-    }
-    
-    public function getPopularProducts(int $limit = 10): array
-    {
-        $top = $this->topK->getTop();
-        $result = [];
-        
-        foreach ($top as $item) {
-            $parts = explode(':', $item->value);
-            if (count($parts) === 2) {
-                $productId = $parts[1];
-                if (isset($this->productCatalog[$productId])) {
-                    $result[] = [
-                        'product_id' => $productId,
-                        'product_name' => $this->productCatalog[$productId]['name'],
-                        'views' => $item->count
-                    ];
-                }
-            }
-            if (count($result) >= $limit) {
-                break;
-            }
-        }
-        return $result;
-    }
-}
-
-// ============================================
-// UTILISATION
-// ============================================
-
-$storage = new MemoryStorage();
-
-$engine = new RecommendationEngine(
-    new CountMinSketch($storage, 10000, 5, 'rec_cms'),
-    new TopK($storage, 50, 'rec_topk')
-);
-
-// Catalogue produits
-$products = [
-    ['id' => 'p1', 'name' => 'Laptop', 'tags' => ['electronics', 'computer', 'gaming']],
-    ['id' => 'p2', 'name' => 'Smartphone', 'tags' => ['electronics', 'mobile', 'communication']],
-    ['id' => 'p3', 'name' => 'Headphones', 'tags' => ['electronics', 'audio', 'music']],
-    ['id' => 'p4', 'name' => 'Book PHP', 'tags' => ['programming', 'php', 'web']],
-    ['id' => 'p5', 'name' => 'Book Python', 'tags' => ['programming', 'python', 'ai']],
-    ['id' => 'p6', 'name' => 'Tablet', 'tags' => ['electronics', 'mobile', 'reading']],
-];
-
-foreach ($products as $product) {
-    $engine->addProduct($product['id'], $product['name'], $product['tags']);
-}
-
-// Tracking des vues
-$views = [
-    ['user_id' => 'user_123', 'product_id' => 'p1'],
-    ['user_id' => 'user_123', 'product_id' => 'p1'],
-    ['user_id' => 'user_123', 'product_id' => 'p2'],
-    ['user_id' => 'user_123', 'product_id' => 'p4'],
-    ['user_id' => 'user_456', 'product_id' => 'p1'],
-    ['user_id' => 'user_456', 'product_id' => 'p3'],
-];
-
-foreach ($views as $view) {
-    $engine->trackView($view['user_id'], $view['product_id']);
-}
-
-echo "=== PRÉFÉRENCES DE l'UTILISATEUR ===\n";
-$preferences = $engine->getUserPreferences('user_123');
-foreach ($preferences as $pref) {
-    echo "- {$pref['product_name']} (vues: {$pref['views']})\n";
-}
-
-echo "\n=== RECOMMANDATIONS ===\n";
-$recommendations = $engine->getRecommendations('user_123', 5);
-foreach ($recommendations as $rec) {
-    echo "- {$rec['product_name']} (tags: " . implode(', ', $rec['matching_tags']) . ")\n";
-}
-
-echo "\n=== PRODUITS POPULAIRES ===\n";
-$popular = $engine->getPopularProducts(5);
-foreach ($popular as $item) {
-    echo "- {$item['product_name']} (vues: {$item['views']})\n";
-}
-```
-
----
-
-## Persistance
-
-### Avec MemoryStorage (par défaut)
-
-```php
-$storage = new MemoryStorage();
-$trie = new Trie($storage, 'my_trie');
-// Les données sont stockées en mémoire
-// Perdues à la fin du script
-```
-
-### Avec RedisStorage (exemple)
-
-```php
-class RedisStorage implements StorageInterface
-{
-    private \Redis $redis;
-    
-    public function __construct(\Redis $redis)
-    {
-        $this->redis = $redis;
-    }
-    
-    public function get(string $key, mixed $default = null): mixed
-    {
-        $value = $this->redis->get($key);
-        return $value !== false ? unserialize($value) : $default;
-    }
-    
-    public function set(string $key, mixed $value): void
-    {
-        $this->redis->set($key, serialize($value));
-    }
-    
-    public function delete(string $key): bool
-    {
-        return (bool) $this->redis->del($key);
-    }
-    
-    public function exists(string $key): bool
-    {
-        return (bool) $this->redis->exists($key);
+        return $builder->get()->toArray();
     }
 }
 
 // Utilisation
-$redis = new \Redis();
-$redis->connect('localhost', 6379);
-$storage = new RedisStorage($redis);
-$trie = new Trie($storage, 'persistent_trie');
-// Les données sont persistées dans Redis
+$articles = $blogSearch->searchArticles([
+    'tags' => ['php', 'laravel'],
+    'categories' => ['web', 'api'],
+    'exclude' => ['deprecated'],
+]);
+```
+
+### 2. Recherche de produits e-commerce
+
+**Problème :** Rechercher des produits avec filtres multiples et alternatives.
+
+```php
+class ProductSearch
+{
+    private InvertedIndexSearchService $search;
+    
+    public function search(array $filters): array
+    {
+        $builder = $this->search->query();
+        
+        // Marques (AND)
+        if (!empty($filters['brands'])) {
+            foreach ($filters['brands'] as $brand) {
+                $builder->where($brand);
+            }
+        }
+        
+        // Couleurs (OR)
+        if (!empty($filters['colors'])) {
+            $builder->whereGroup(function($q) use ($filters) {
+                foreach ($filters['colors'] as $color) {
+                    $q->orWhere($color);
+                }
+            });
+        }
+        
+        // Prix (facultatif)
+        if (isset($filters['price_range'])) {
+            $builder->where($filters['price_range']);
+        }
+        
+        return $builder->get()->toArray();
+    }
+}
+
+// Utilisation
+$products = $productSearch->search([
+    'brands' => ['nike', 'adidas'],
+    'colors' => ['red', 'blue', 'black'],
+    'price_range' => 'premium',
+]);
+```
+
+### 3. Analyse de logs avec filtres
+
+**Problème :** Analyser des logs d'application avec des filtres complexes.
+
+```php
+class LogAnalyzer
+{
+    private InvertedIndexSearchService $search;
+    
+    public function analyzeLogs(array $logs): array
+    {
+        $expression = 'error OR (warning AND php) NOT (debug OR trace)';
+        
+        $results = $this->search->expression($expression);
+        
+        $stats = [
+            'total' => count($logs),
+            'matching' => $results->count(),
+            'log_ids' => $results->toArray(),
+        ];
+        
+        return $stats;
+    }
+}
+
+// Utilisation
+$analyzer = new LogAnalyzer($search);
+$stats = $analyzer->analyzeLogs($logs);
+```
+
+### 4. API de recherche dynamique
+
+**Problème :** Exposer une API de recherche où les utilisateurs peuvent utiliser des opérateurs booléens.
+
+```php
+class SearchAPI
+{
+    private InvertedIndexSearchService $search;
+    
+    public function search(Request $request): JsonResponse
+    {
+        $query = $request->get('q');
+        $limit = (int) $request->get('limit', 10);
+        
+        try {
+            // L'utilisateur peut utiliser des opérateurs avancés
+            $results = $this->search->expression($query);
+            $limited = $results->take($limit);
+            
+            return response()->json([
+                'success' => true,
+                'results' => $limited->toArray(),
+                'total' => $results->count(),
+                'limit' => $limit,
+            ]);
+        } catch (InvalidArgumentException $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Invalid search expression',
+                'message' => $e->getMessage(),
+            ], 400);
+        }
+    }
+}
+
+// Requêtes API acceptées
+// GET /search?q=php AND laravel
+// GET /search?q=(php OR python) AND web
+// GET /search?q=php AND (NOT java)
+// GET /search?q=php AND (laravel OR vuejs) NOT python
+```
+
+### 5. Système de recommandation de tags
+
+**Problème :** Recommander des tags pertinents basés sur une combinaison de tags existants.
+
+```php
+class TagRecommender
+{
+    private InvertedIndexSearchService $search;
+    
+    public function recommendTags(array $existingTags, int $limit = 5): array
+    {
+        $builder = $this->search->query();
+        
+        // Tags existants
+        foreach ($existingTags as $tag) {
+            $builder->where($tag);
+        }
+        
+        $results = $builder->get();
+        
+        // Extraire les tags associés
+        $relatedTags = [];
+        foreach ($results as $docId) {
+            $doc = $this->getDocument($docId);
+            $relatedTags = array_merge($relatedTags, $doc['tags']);
+        }
+        
+        // Compter et trier les tags
+        $counts = array_count_values($relatedTags);
+        arsort($counts);
+        
+        // Filtrer les tags existants
+        $recommended = array_diff(array_keys($counts), $existingTags);
+        
+        return array_slice($recommended, 0, $limit);
+    }
+}
+
+// Utilisation
+$recommendations = $recommender->recommendTags(['php', 'laravel']);
+// → ['web', 'api', 'eloquent', 'vuejs']
 ```
 
 ---
 
 ## Performance
 
-### Comparatif des structures
+### Complexité algorithmique
 
-| Structure | Insertion | Recherche | Mémoire | Précision | Idéal pour |
-|-----------|-----------|-----------|---------|-----------|------------|
-| Trie | O(L) | O(L + M) | Élevée | 100% | Autocomplétion |
-| BKTree | O(log n) | O(n) | Moyenne | 100% | Correction orthographique |
-| BloomFilter | O(k) | O(k) | Très faible | ~99% | Test d'existence |
-| CountMinSketch | O(d) | O(d) | Très faible | ~95% | Comptage de fréquence |
-| HyperLogLog | O(1) | O(m) | Très faible | ~98% | Éléments uniques |
-| TopK | O(k) | O(k) | Faible | 100% | Top fréquents |
+| Opération | Complexité | Détails |
+|-----------|------------|---------|
+| AND (2 tokens) | O(a + b) | Intersection de deux ensembles |
+| AND (n tokens) | O(n × m) | Intersection séquentielle |
+| OR (n tokens) | O(n × m) | Union et déduplication |
+| NOT | O(a + b) | Différence d'ensembles |
+| XOR | O(a + b) | Différences symétriques |
+| Expression | O(n × m) | Dépend de la complexité |
 
-### Recommandations
+### Optimisations
 
-| Besoin | Structure recommandée |
-|--------|----------------------|
-| Précision absolue | Trie, BKTree, TopK |
-| Mémoire limitée | BloomFilter, CountMinSketch, HyperLogLog |
-| Flux massifs | CountMinSketch, HyperLogLog |
-| Recherche temps réel | Trie, BloomFilter |
-| Correction orthographique | BKTree |
-| Comptage d'occurrences | CountMinSketch |
-| Éléments uniques | HyperLogLog |
-| Classement | TopK |
+- **Recherche en cache** : Chaque token est recherché une seule fois
+- **Opérations natives** : Utilisation des fonctions PHP optimisées en C
+- **Lazy loading** : QueryBuilder instancié à la demande
+- **Collections typées** : `StringTypedCollection` pour des opérations efficaces
+- **Pas de duplication** : Les résultats sont dédupliqués automatiquement
+
+### Comparatif
+
+| Structure | Mémoire | Performance | Précision |
+|-----------|---------|-------------|-----------|
+| InvertedIndexSearch | Moyenne | Rapide (O(1) par terme) | 100% |
+| Recherche naïve | Élevée | Lent (O(n)) | 100% |
+| Base de données SQL | Élevée | Moyen (indexes) | 100% |
 
 ---
 
 ## API Reference
 
-### Structures
+### Services
 
-- [Trie](docs/api-reference/algorithms/trie.md) - Autocomplétion et recherche par préfixe
-- [BKTree](docs/api-reference/algorithms/bk-tree.md) - Correction orthographique et recherche floue
-- [BloomFilter](docs/api-reference/algorithms/bloom-filter.md) - Test probabiliste d'appartenance
-- [CountMinSketch](docs/api-reference/algorithms/count-min-sketch.md) - Comptage probabiliste de fréquences
-- [HyperLogLog](docs/api-reference/algorithms/hyper-log-log.md) - Estimation de cardinalité
-- [TopK](docs/api-reference/algorithms/top-k.md) - Suivi des éléments les plus fréquents
+- [InvertedIndexSearchService](docs/api-reference/services/search-service.md) - Service principal de recherche
+- [InvertedIndexQueryBuilder](docs/api-reference/services/query-builder.md) - Constructeur fluent
+- [InvertedIndexExpressionEvaluator](docs/api-reference/services/expression-evaluator.md) - Évaluateur d'expressions
 
 ### Interfaces
 
-- `StorageInterface` - Interface de persistance
-- `TrieInterface` - Interface du Trie
-- `BloomFilterInterface` - Interface du BloomFilter
-- `CountMinSketchInterface` - Interface du CountMinSketch
-- `HyperLogLogInterface` - Interface du HyperLogLog
-- `TopKInterface` - Interface du TopK
-- `TreeInterface` - Interface du BKTree
+- `InvertedIndexSearchServiceInterface` - Interface du service de recherche
+- `InvertedIndexQueryBuilderInterface` - Interface du QueryBuilder
+- `InvertedIndexExpressionEvaluatorInterface` - Interface de l'évaluateur
+
+### Enums
+
+- `InvertedIndexOperator` - Opérateurs booléens (AND, OR, NOT, XOR)
 
 ### Collections
 
-- `TrieCollection` / `TrieResultCollection`
-- `BloomFilterCollection` / `BloomFilterResultCollection`
-- `CountMinSketchCollection` / `CountMinSketchResultCollection`
-- `HyperLogLogCollection` / `HyperLogLogResultCollection`
-- `TopKCollection` / `TopKResultCollection`
-- `BKTreeNodeCollection` / `BKTreeResultCollection`
-
-### Records
-
-- `TrieRecord` / `TrieResultRecord`
-- `BloomFilterRecord` / `BloomFilterResultRecord`
-- `CountMinSketchRecord` / `CountMinSketchResultRecord`
-- `HyperLogLogRecord` / `HyperLogLogResultRecord`
-- `TopKRecord` / `TopKResultRecord`
-- `BKTreeNodeRecord` / `BKTreeResultRecord`
+- `StringTypedCollection` - Collection de chaînes de caractères
 
 ---
 
